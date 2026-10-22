@@ -1,18 +1,21 @@
 // Minimal HTTP server that logs every incoming request with its source IP.
 // Run: node server.js   (PORT env var optional, default 3000)
-// Set TRUST_PROXY=1 only if behind a reverse proxy you control (nginx, ALB, ...),
-// so the client IP is taken from X-Forwarded-For instead of the socket.
+// Behind a proxy (Render, nginx, ...) the socket IP is the proxy's, so the client IP
+// is read from forwarding headers. socketIp and forwardedFor are logged for debugging.
 const http = require('http');
 const fs = require('fs');
 
 const PORT = process.env.PORT || 3000;
-const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+// On by default because hosts like Render always sit behind a proxy; set TRUST_PROXY=0 to disable.
+const TRUST_PROXY = process.env.TRUST_PROXY !== '0';
 const LOG_FILE = process.env.LOG_FILE || 'requests.log';
 
 function clientIp(req) {
   if (TRUST_PROXY) {
-    const xff = req.headers['x-forwarded-for'];
-    if (xff) return xff.split(',')[0].trim();
+    const h = req.headers;
+    const fwd = h['cf-connecting-ip'] || h['true-client-ip'] || h['x-real-ip'] ||
+      (h['x-forwarded-for'] || '').split(',')[0].trim();
+    if (fwd) return fwd;
   }
   // Strip the IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 -> 1.2.3.4)
   return (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
@@ -24,7 +27,8 @@ const server = http.createServer((req, res) => {
   const entry = {
     time: new Date().toISOString(),
     ip: clientIp(req),
-    port: req.socket.remotePort,
+    socketIp: (req.socket.remoteAddress || '').replace(/^::ffff:/, ''),
+    forwardedFor: req.headers['x-forwarded-for'],
     method: req.method,
     url: req.url,
     host: req.headers.host,
